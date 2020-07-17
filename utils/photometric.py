@@ -34,7 +34,7 @@ class ImgAugTransform:
             # if params['random_contrast']:
             if params.get('random_contrast', False):
                 change = params['random_contrast']['strength_range']
-                aug = iaa.LinearContrast((change[0], change[1]))
+                aug = iaa.contrast.LinearContrast((change[0], change[1]))
                 aug_all.append(aug)
             # if params['additive_gaussian_noise']:
             if params.get('additive_gaussian_noise', False):

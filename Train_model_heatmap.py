@@ -386,9 +386,11 @@ class Train_model_heatmap(Train_model_frontend):
             self.optimizer.step()
 
         if n_iter % tb_interval == 0 or task == "val":
+            '''
             logging.info(
                 "current iteration: %d, tensorboard_interval: %d", n_iter, tb_interval
             )
+            '''
 
             # add clean map to tensorboard
             ## semi_warp: flatten, to_numpy
@@ -509,10 +511,10 @@ class Train_model_heatmap(Train_model_frontend):
                 to_floatTensor(heatmap_org_nms_batch[:, np.newaxis, ...]),
                 sample["labels_2D"],
             )
-            print("pr_mean")
+            # print("pr_mean")
             self.scalar_dict.update(pr_mean)
 
-            self.printLosses(self.scalar_dict, task)
+            # self.printLosses(self.scalar_dict, task)
             self.tb_images_dict(task, self.images_dict, max_img=2)
             self.tb_hist_dict(task, self.hist_dict)
 

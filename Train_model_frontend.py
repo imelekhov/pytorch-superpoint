@@ -6,6 +6,7 @@ Date: 2019/12/12
 """
 
 import numpy as np
+from os import path as osp
 import torch
 # from torch.autograd import Variable
 # import torch.backends.cudnn as cudnn
@@ -300,6 +301,48 @@ class Train_model_frontend(object):
 
         pass
 
+    def train_my(self, **options):
+        """
+        # outer loop for training
+        # control training and validation pace
+        # stop when reaching max iterations
+        :param options:
+        :return:
+        """
+        # training info
+        print("n_iter: ", self.n_iter)
+        print("max_iter: ", self.max_iter)
+        max_val_error = 1e5
+
+        for epoch in range(self.max_iter):
+            running_total_train_loss, running_total_val_loss = 0, 0
+            print("Training...")
+            for _, sample_train in tqdm(enumerate(self.train_loader), total=len(self.train_loader)):
+                loss_train = self.train_val_sample(sample_train, 0, True)
+                running_total_train_loss += loss_train
+            train_loss = running_total_train_loss / len(self.train_loader)
+            print("Validation...")
+            for _, sample_val in tqdm(enumerate(self.val_loader), total=len(self.val_loader)):
+                loss_val = self.train_val_sample(sample_val, 0, False)
+                running_total_val_loss += loss_val
+            val_loss = running_total_val_loss / len(self.val_loader)
+
+            print(str(epoch + 1) + "/" + str(self.max_iter) + ", train_loss: ", train_loss, "; val_loss: ", val_loss)
+
+            print(f"\n>> Saving model to {self.save_path}")
+            torch.save({"model_state_dict": self.net.module.state_dict(),
+                        "optimizer_state_dict": self.optimizer.state_dict()},
+                       osp.join(self.save_path, "checkpoint" + str(epoch) + ".pt"))
+
+            if val_loss < max_val_error:
+                print(f"\n>> Saving model (the lowest validation error)")
+                torch.save({"model_state_dict":self.net.module.state_dict(),
+                            "optimizer_state_dict": self.optimizer.state_dict()},
+                           osp.join(self.save_path, "min_val_error_checkpoint.pt"))
+
+        print("Training is done.")
+
+
     def getLabels(self, labels_2D, cell_size, device="cpu"):
         """
         # transform 2D labels to 3D shape for training
@@ -545,6 +588,7 @@ class Train_model_frontend(object):
             self.optimizer.step()
 
         self.addLosses2tensorboard(losses, task)
+        '''
         if n_iter % tb_interval == 0 or task == "val":
             logging.info(
                 "current iteration: %d, tensorboard_interval: %d", n_iter, tb_interval
@@ -575,7 +619,7 @@ class Train_model_frontend(object):
             self.add2tensorboard_nms(
                 img, labels_2D, semi, task=task, batch_size=batch_size
             )
-
+        '''
         return loss.item()
 
     def saveModel(self):

@@ -182,7 +182,7 @@ class Train_model_subpixel(Train_model_frontend):
 
         self.tb_scalar_dict(losses, task)
         if n_iter % tb_interval == 0 or task == 'val':
-            logging.info("current iteration: %d, tensorboard_interval: %d", n_iter, tb_interval)
+            # logging.info("current iteration: %d, tensorboard_interval: %d", n_iter, tb_interval)
             self.tb_images_dict(task, tb_imgs, max_img=5)
             self.tb_hist_dict(task, tb_hist)
 

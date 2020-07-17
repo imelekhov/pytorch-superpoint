@@ -11,6 +11,7 @@ import time
 import csv
 import yaml
 import os
+from os import path as osp
 import logging
 from pathlib import Path
 
@@ -43,7 +44,7 @@ from models.model_wrap import SuperPointFrontend_torch, PointTracker
 ## parameters
 from settings import EXPER_PATH
 
-#### util functions
+from datasets.phototourism import Phototourism
 
 
 def combine_heatmap(heatmap, inv_homographies, mask_2D, device="cpu"):
@@ -357,6 +358,164 @@ def export_detector_homoAdapt_gpu(config, output_dir, args):
     pass
 
 
+@torch.no_grad()
+def export_detector_phototourism_gpu(config, output_dir, args):
+    """
+    input 1 images, output pseudo ground truth by homography adaptation.
+    Save labels:
+        pred:
+            'prob' (keypoints): np (N1, 3)
+    """
+    from utils.utils import pltImshow
+    from utils.utils import saveImg
+    from utils.draw import draw_keypoints
+
+    proj_path = "/data/projects/pytorch-superpoint"
+    splits = ["train", "val"]
+
+    # basic setting
+    task = config["data"]["dataset"]
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    logging.info("train on device: %s", device)
+    with open(osp.join(proj_path, output_dir, "config.yml"), "w") as f:
+        yaml.dump(config, f, default_flow_style=False)
+
+    ## parameters
+    nms_dist = config["model"]["nms"]  # 4
+    top_k = config["model"]["top_k"]
+    homoAdapt_iter = config["data"]["homography_adaptation"]["num"]
+    conf_thresh = config["model"]["detection_threshold"]
+    nn_thresh = 0.7
+    count = 0
+    output_images = args.outputImg
+    check_exist = True
+
+    ## save data
+    '''
+    save_path = Path(output_dir)
+    save_output = save_path
+    save_output = save_output / "predictions" / export_task
+    os.makedirs(save_output, exist_ok=True)
+    '''
+
+    def _create_loader(dataset, n_workers=8):
+        return torch.utils.data.DataLoader(dataset,
+                                           shuffle=False,
+                                           pin_memory=True,
+                                           num_workers=n_workers,
+                                           )
+
+    data_loaders = {}
+    # create the dataset and dataloader classes
+    for split in splits:
+        dataset = Phototourism(split=split, **config["data"])
+        data_loaders[split] = _create_loader(dataset)
+
+    # model loading
+    ## load pretrained
+    try:
+        path = config["pretrained"]
+        print("==> Loading pre-trained network.")
+        print("path: ", path)
+        # This class runs the SuperPoint network and processes its outputs.
+
+        fe = SuperPointFrontend_torch(
+            config=config,
+            weights_path=path,
+            nms_dist=nms_dist,
+            conf_thresh=conf_thresh,
+            nn_thresh=nn_thresh,
+            cuda=False,
+            device=device,
+        )
+        print("==> Successfully loaded pre-trained network.")
+
+        fe.net_parallel()
+        print(path)
+        # save to files
+        '''
+        save_file = save_output / "export.txt"
+        with open(save_file, "a") as myfile:
+            myfile.write("load model: " + path + "\n")
+        '''
+    except Exception:
+        print(f"load model: {path} failed! ")
+        raise
+
+    ## loop through all images
+    for split in splits:
+        save_path = osp.join(proj_path, output_dir, "predictions", split)
+        det_path = osp.join(save_path, "detection")
+        if not osp.isdir(det_path):
+            os.makedirs(det_path)
+
+        if output_images:
+            quality_res_path = osp.join(save_path, "quality_res")
+            if not osp.isdir(quality_res_path):
+                os.makedirs(quality_res_path)
+
+        print(len(data_loaders[split]))
+        for i, sample in tqdm(enumerate(data_loaders[split])):
+            img, mask_2D = sample["image"], sample["valid_mask"]
+            img = img.transpose(0, 1)
+            img_2D = sample["image_2D"].numpy().squeeze()
+            mask_2D = mask_2D.transpose(0, 1)
+
+            inv_homographies, homographies = (
+                sample["homographies"],
+                sample["inv_homographies"],
+            )
+            img, mask_2D, homographies, inv_homographies = (
+                img.to(device),
+                mask_2D.to(device),
+                homographies.to(device),
+                inv_homographies.to(device),
+            )
+            # sample = test_set[i]
+            name = sample["name"][0]
+            fname_out = osp.join(det_path, "{}.npz".format(str(name).replace('/', '_')))
+            if osp.isfile(fname_out):
+                continue
+
+            # pass through network
+            heatmap = fe.run(img, onlyHeatmap=True, train=False)
+            outputs = combine_heatmap(heatmap, inv_homographies, mask_2D, device=device)
+            pts = fe.getPtsFromHeatmap(outputs.detach().cpu().squeeze())  # (x,y, prob)
+
+            # subpixel prediction
+            if config["model"]["subpixel"]["enable"]:
+                fe.heatmap = outputs  # tensor [batch, 1, H, W]
+                pts = fe.soft_argmax_points([pts])
+                pts = pts[0]
+
+            ## top K points
+            pts = pts.transpose()
+            if top_k:
+                if pts.shape[0] > top_k:
+                    pts = pts[:top_k, :]
+                    print("topK filter: ", pts.shape)
+
+            ## save keypoints
+            pred = {}
+            pred.update({"pts": pts})
+
+            ## - make directories
+            np.savez_compressed(fname_out, **pred)
+
+            ## output images for visualization labels
+            if output_images:
+                img_pts = draw_keypoints(img_2D * 255, pts.transpose())
+                fname_out_det = osp.join(quality_res_path, str(name).replace('/', '_') + ".png")
+                saveImg(img_pts, fname_out_det)
+            count += 1
+            print(str(i + 1) + " out of " + str(len(data_loaders[split])) + " done.")
+
+        print("output pseudo ground truth, ", split.capitalize(), ": ", count)
+
+    print("Done")
+
+
 if __name__ == "__main__":
     # global var
     torch.set_default_tensor_type(torch.FloatTensor)
@@ -393,9 +552,10 @@ if __name__ == "__main__":
         "--debug", action="store_true", default=False, help="turn on debuging mode"
     )
     # p_train.set_defaults(func=export_detector_homoAdapt)
-    p_train.set_defaults(func=export_detector_homoAdapt_gpu)
+    p_train.set_defaults(func=export_detector_phototourism_gpu)
 
     args = parser.parse_args()
+    args.outputImg = True
     with open(args.config, "r") as f:
         config = yaml.load(f)
     print("check config!! ", config)
